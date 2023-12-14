@@ -1,0 +1,6 @@
+functions-framework==3.*
+requests==2.26.0
+google-cloud-storage==1.44.0
+google-api-python-client==2.38.0
+google-cloud-secret-manager==2.7.0
+fsspec
