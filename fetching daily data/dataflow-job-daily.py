@@ -36,7 +36,6 @@ options.view_as(StandardOptions).runner = 'DataflowRunner'
 
 
 
-
 def run():
   with beam.Pipeline(options=options) as pipeline:
       # Read data from Cloud Storage
@@ -56,7 +55,6 @@ def run():
           write_disposition=beam.io.BigQueryDisposition.WRITE_APPEND,
           create_disposition=beam.io.BigQueryDisposition.CREATE_IF_NEEDED
       )
-
 
 
 
@@ -97,9 +95,8 @@ def parse_json(json_str):
     return result
 
 
-
 # def generateUUID():
-#     return str(uuid.uuid4())
+#      return str(uuid.uuid4()) -IF RANDOM UUID IS REQUIRED
 
 
 class RoundExchangeRateFn(beam.DoFn):
@@ -107,7 +104,6 @@ class RoundExchangeRateFn(beam.DoFn):
        element['exchange_rate'] = round(element['exchange_rate'], 6)  # Rounding to 6 decimal places
        yield element
       
-
 
 if __name__ == '__main__':
   run()

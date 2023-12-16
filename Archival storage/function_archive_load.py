@@ -1,4 +1,4 @@
-# ARCHIVE LOGIC-1
+# ARCHIVE RAW DATA METHOD-1
 
 # Move and Store the RAW data by year/month/day
 

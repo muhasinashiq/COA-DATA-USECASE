@@ -1,6 +1,6 @@
-# ARCHIVE LOGIC-2
+# ARCHIVE RAW DATA METHOD-2
 
-#Appending Daily raw data in the same file(copying)
+#Appending Daily raw data in the same file
 
 import functions_framework
 from google.cloud import storage

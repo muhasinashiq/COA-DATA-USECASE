@@ -3,13 +3,9 @@ from apache_beam.options.pipeline_options import PipelineOptions, GoogleCloudOpt
 import json
 
 
-import os
-
-
+# import os
 # Inorder to set GOOGLE_APPLICATION_CREDENTIALS environment variable in Python code to the path key.json file
 # os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = "/home/muhasinashiq1811/df.json"
-
-
 
 
 project_id = 'unique-atom-406411'
