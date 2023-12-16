@@ -1,105 +1,115 @@
-import functions_framework
+import apache_beam as beam
+from apache_beam.options.pipeline_options import PipelineOptions, GoogleCloudOptions, StandardOptions
 import json
-import requests
 from datetime import datetime
-from google.cloud import storage
-from google.auth import compute_engine
-from googleapiclient.discovery import build
-from google.cloud import secretmanager
+import uuid
 
 
-base_url_currencies = 'https://api.freecurrencyapi.com/v1/currencies'
-base_url_rates = 'https://api.freecurrencyapi.com/v1/latest'
+#Dataflow options
+project_id = 'unique-atom-406411'
+bucket_name = 'currencybkt'
+data_path = f'gs://{bucket_name}/rate_data.json' 
+output_table = f'{project_id}.currencyupdated.forex_update_DB' 
 
-@functions_framework.http
-def main(request):
-    try:
-        def fetch_secret(secret_id):
-            try:
-                client = secretmanager.SecretManagerServiceClient()
-                name = f"projects/952702250749/secrets/{secret_id}/versions/1"  
-                response = client.access_secret_version(request={"name": name})
-                return response.payload.data.decode("UTF-8")
-            except Exception as e:
-                # Handle the exception (e.g., log the error)
-                print(f"Error fetching secret: {str(e)}")
-                return None
 
-        API_KEY = fetch_secret("freecurrencyAPI-key")
+#schema for the BigQuery table
+schema = {
+  'fields': [
+      {'name': 'UUID', 'type': 'STRING'},
+      {'name': 'fetch_timestamp', 'type': 'TIMESTAMP'},
+      {'name': 'currency_date', 'type': 'DATE'},
+      {'name': 'base_currency', 'type': 'STRING'},
+      {'name': 'foreign_currency', 'type': 'STRING'},
+      {'name': 'exchange_rate', 'type': 'FLOAT'},
+  ]
+}
 
-        def fetch_and_store_currency_data():
-            try:
-                # Fetch currency names
-                params = {'apikey': API_KEY}
-                response = requests.get(base_url_currencies, params=params)
-                name_data = response.json()
 
-                # Store currency names in Cloud Storage
-                storage_client = storage.Client()
-                bucket = storage_client.get_bucket('currencybkt')
-                blob = bucket.blob('name_data.json')
-                blob.upload_from_string(data=json.dumps(name_data))
+options = PipelineOptions()
+google_cloud_options = options.view_as(GoogleCloudOptions)
+google_cloud_options.project = project_id
+google_cloud_options.job_name = 'job-test' 
+google_cloud_options.staging_location = f'gs://{bucket_name}/staging'
+google_cloud_options.temp_location = f'gs://{bucket_name}/temp'
+google_cloud_options.region = 'us-central1'
+options.view_as(StandardOptions).runner = 'DataflowRunner'
 
-                # Fetch currency rates
-                params = {'apikey': API_KEY, 'base_currency': 'INR'}  
-                response = requests.get(base_url_rates, params=params)
-                rate_data = response.json()
-                last_updated_at = response.headers.get('Date')
-            
-                currency_data = rate_data.get('data', {})
-                response_data = {
-                    "meta": {"last_updated_at":  last_updated_at},
-                    "data": currency_data
-                }
 
-                # Store currency rates in Cloud Storage
-                blob = bucket.blob('rate_data.json')
-                blob.upload_from_string(data=json.dumps(response_data))
 
-                return "Currency data successfully fetched and stored in Cloud Storage."
 
-            except requests.RequestException as e:
-                return f"Error with request: {str(e)}"
-            except storage.StorageError as e:
-                return f"Error storing data in Cloud Storage: {str(e)}"
-            except Exception as e:
-                return f"An unexpected error occurred: {str(e)}"
+def run():
+  with beam.Pipeline(options=options) as pipeline:
+      # Read data from Cloud Storage
+      data = (
+          pipeline
+          | 'ReadData' >> beam.io.ReadFromText(data_path)
+          | 'ParseJSON' >> beam.Map(parse_json)
+          | 'FlattenDict' >> beam.FlatMap(lambda x: x)  # Flatten the list of dictionaries
+          | 'Round Exchange Rate' >> beam.ParDo(RoundExchangeRateFn())
+      )
+
+
+      # Write data to BigQuery with schema specified
+      data | 'WriteToBigQuery' >> beam.io.WriteToBigQuery(
+          output_table,
+          schema=schema,
+          write_disposition=beam.io.BigQueryDisposition.WRITE_APPEND,
+          create_disposition=beam.io.BigQueryDisposition.CREATE_IF_NEEDED
+      )
+
+
+
+
+def parse_json(json_str):
+    import datetime
+    import uuid
+
+    def format_date(date_str):
+        if not date_str:
+            return None
         
-        result = fetch_and_store_currency_data()
-        dataflow_result = run_dataflow_job('unique-atom-406411')
+        # Convert the date string to a datetime object
+        date_time_obj = datetime.datetime.strptime(date_str, '%a, %d %b %Y %H:%M:%S %Z')
 
-        return f"{result}\n{dataflow_result}"
+        # Format the datetime object to ISO 8601 format
+        iso_formatted_date = date_time_obj.strftime('%Y-%m-%d')
 
-    except Exception as e:
-        return f"Error: {str(e)}"
+        return iso_formatted_date
 
-
-def run_dataflow_job(project):
-    try:
-        credentials = compute_engine.Credentials()
-        dataflow = build('dataflow', 'v1b3', credentials=credentials)
-
-        template_path = "gs://currencybkt/pipeline-templatenew"
-        job_name = "job3-daily" 
-
-        parameters = {
-           'job_name': job_name,
-           'runner': 'DataflowRunner',
-           'project': 'unique-atom-406411',
-           'template_location': 'gs://currencybkt/temp'  
-        }
-
-        response = dataflow.projects().locations().templates().launch(
-            projectId=project,
-            gcsPath=template_path,
-            location='us-central1',
-            body={
-                'jobName': job_name,
-                'parameters': parameters
-            }
-        ).execute()
-        
-        return json.dumps({'status': 'Job triggered successfully', 'response': response})
+    data = json.loads(json_str)
+    meta_info = data.get('meta', {})
+    currency_data = data.get('data', {})
+    last_updated_at = meta_info.get('last_updated_at', '')  # Extract date from 'last_updated_at'
+    formatted_date = format_date(last_updated_at)
     
-    except Exception as e:
-        return json.dumps({'error': str(e)})
+    if formatted_date is None:
+        return []  # Return an empty list if last_updated_at is empty
+
+    current_timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    
+    # Extract data and create a list of dictionaries with unique UUIDs for each row
+    result = []
+    base_currency = 'INR'
+    for currency, exchange_rate in currency_data.items():
+        uuid = f"{currency}/{formatted_date}"
+        result.append({'UUID': uuid, 'fetch_timestamp': current_timestamp,'currency_date': formatted_date,'base_currency': base_currency, 'foreign_currency': currency, 'exchange_rate': exchange_rate})
+
+    return result
+
+
+
+# def generateUUID():
+#     return str(uuid.uuid4())
+
+
+class RoundExchangeRateFn(beam.DoFn):
+   def process(self, element):
+       element['exchange_rate'] = round(element['exchange_rate'], 6)  # Rounding to 6 decimal places
+       yield element
+      
+
+
+if __name__ == '__main__':
+  run()
+
+
